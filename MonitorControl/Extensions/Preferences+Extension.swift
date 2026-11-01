@@ -8,6 +8,7 @@ extension Settings.PaneIdentifier {
   static let menusliders = Self("Menu & Sliders")
   static let keyboard = Self("Keyboard")
   static let displays = Self("Displays")
+  static let inputs = Self("Inputs")
   static let about = Self("About")
 }
 

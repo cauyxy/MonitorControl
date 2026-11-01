@@ -8,6 +8,8 @@ class MenuHandler: NSMenu, NSMenuDelegate {
 
   var lastMenuRelevantDisplayId: CGDirectDisplayID = 0
 
+  let inputSourceMenu = InputSourceMenu()
+
   func clearMenu() {
     var items: [NSMenuItem] = []
     for i in 0 ..< self.items.count {
@@ -17,11 +19,13 @@ class MenuHandler: NSMenu, NSMenuDelegate {
       self.removeItem(item)
     }
     self.combinedSliderHandler.removeAll()
+    self.inputSourceMenu.reset()
   }
 
   func menuWillOpen(_: NSMenu) {
     self.updateMenuRelevantDisplay()
     app.keyboardShortcuts.disengage()
+    self.inputSourceMenu.refresh()
   }
 
   func closeMenu() {
@@ -56,11 +60,12 @@ class MenuHandler: NSMenu, NSMenuDelegate {
     displays = DisplayManager.shared.sortDisplaysByFriendlyName()
     let relevant = prefs.integer(forKey: PrefKey.multiSliders.rawValue) == MultiSliders.relevant.rawValue
     let combine = prefs.integer(forKey: PrefKey.multiSliders.rawValue) == MultiSliders.combine.rawValue
-    let numOfDisplays = displays.filter { !$0.isDummy }.count
+    let hiddenIDs = Set(ArrangementManager.shared.hiddenDisplays.map(\.prefsId)) // hidden but not yet gone from the display list
+    let numOfDisplays = displays.filter { !$0.isDummy && !hiddenIDs.contains($0.prefsId) }.count + hiddenIDs.count
     if numOfDisplays != 0 {
       let asSubMenu: Bool = (displays.count > 3 && !relevant && !combine && app.macOS10()) ? true : false
       var iterator = 0
-      for display in displays where (!relevant || DisplayManager.resolveEffectiveDisplayID(display.identifier) == DisplayManager.resolveEffectiveDisplayID(currentDisplay!.identifier)) && !display.isDummy {
+      for display in displays where (!relevant || DisplayManager.resolveEffectiveDisplayID(display.identifier) == DisplayManager.resolveEffectiveDisplayID(currentDisplay!.identifier)) && !display.isDummy && !hiddenIDs.contains(display.prefsId) {
         iterator += 1
         if !relevant, !combine, iterator != 1, app.macOS10() {
           self.insertItem(NSMenuItem.separator(), at: 0)
@@ -70,6 +75,11 @@ class MenuHandler: NSMenu, NSMenuDelegate {
       if combine {
         self.addCombinedDisplayMenuBlock()
       }
+    }
+    for display in ArrangementManager.shared.hiddenDisplays {
+      let name = display.readPrefAsString(key: .friendlyName) != "" ? display.readPrefAsString(key: .friendlyName) : display.name
+      let inBlock = numOfDisplays > 1 && !relevant && !DEBUG_MACOS10 && !app.macOS10()
+      self.addDisplayMenuBlock(addedSliderHandlers: [], blockName: name, monitorSubMenu: self, numOfDisplays: numOfDisplays, asSubMenu: false, extraViews: [self.inputSourceMenu.hiddenDisplayRow(display: display, name: inBlock ? nil : name)])
     }
     self.addDefaultMenuOptions()
   }
@@ -101,7 +111,8 @@ class MenuHandler: NSMenu, NSMenuDelegate {
     }
   }
 
-  func addDisplayMenuBlock(addedSliderHandlers: [SliderHandler], blockName: String, monitorSubMenu: NSMenu, numOfDisplays: Int, asSubMenu: Bool) {
+  func addDisplayMenuBlock(addedSliderHandlers: [SliderHandler], blockName: String, monitorSubMenu: NSMenu, numOfDisplays: Int, asSubMenu: Bool, extraViews: [NSView] = []) {
+    let blockViews = extraViews + addedSliderHandlers.map { $0.view! } // bottom to top
     if numOfDisplays > 1, prefs.integer(forKey: PrefKey.multiSliders.rawValue) != MultiSliders.relevant.rawValue, !DEBUG_MACOS10, #available(macOS 11.0, *) {
       class BlockView: NSView {
         override func draw(_: NSRect) {
@@ -126,9 +137,9 @@ class MenuHandler: NSMenu, NSMenuDelegate {
       }
       var contentWidth: CGFloat = 0
       var contentHeight: CGFloat = 0
-      for addedSliderHandler in addedSliderHandlers {
-        contentWidth = max(addedSliderHandler.view!.frame.width, contentWidth)
-        contentHeight += addedSliderHandler.view!.frame.height
+      for blockView in blockViews {
+        contentWidth = max(blockView.frame.width, contentWidth)
+        contentHeight += blockView.frame.height
       }
       let margin = CGFloat(13)
       var blockNameView: NSTextField?
@@ -141,10 +152,10 @@ class MenuHandler: NSMenu, NSMenuDelegate {
       }
       let itemView = BlockView(frame: NSRect(x: 0, y: 0, width: contentWidth + margin * 2, height: contentHeight + margin * 2))
       var sliderPosition = CGFloat(margin * -1 + 1)
-      for addedSliderHandler in addedSliderHandlers {
-        addedSliderHandler.view!.setFrameOrigin(NSPoint(x: margin, y: margin + sliderPosition + 13))
-        itemView.addSubview(addedSliderHandler.view!)
-        sliderPosition += addedSliderHandler.view!.frame.height
+      for blockView in blockViews {
+        blockView.setFrameOrigin(NSPoint(x: margin, y: margin + sliderPosition + 13))
+        itemView.addSubview(blockView)
+        sliderPosition += blockView.frame.height
       }
       if let blockNameView = blockNameView {
         blockNameView.setFrameOrigin(NSPoint(x: margin + 13, y: contentHeight - 8))
@@ -152,10 +163,15 @@ class MenuHandler: NSMenu, NSMenuDelegate {
       }
       let item = NSMenuItem()
       item.view = itemView
-      if addedSliderHandlers.count != 0 {
+      if !blockViews.isEmpty {
         monitorSubMenu.insertItem(item, at: 0)
       }
     } else {
+      for extraView in extraViews {
+        let item = NSMenuItem()
+        item.view = extraView
+        monitorSubMenu.insertItem(item, at: 0)
+      }
       for addedSliderHandler in addedSliderHandlers {
         self.addSliderItem(monitorSubMenu: monitorSubMenu, sliderHandler: addedSliderHandler)
       }
@@ -194,8 +210,18 @@ class MenuHandler: NSMenu, NSMenuDelegate {
       let title = NSLocalizedString("Brightness", comment: "Shown in menu")
       addedSliderHandlers.append(self.setupMenuSliderHandler(command: .brightness, display: display, title: title))
     }
+    var extraViews: [NSView] = []
+    if let otherDisplay = display as? OtherDisplay, !otherDisplay.isSw() {
+      extraViews.append(self.inputSourceMenu.inputRow(display: otherDisplay))
+    }
     if prefs.integer(forKey: PrefKey.multiSliders.rawValue) != MultiSliders.combine.rawValue {
-      self.addDisplayMenuBlock(addedSliderHandlers: addedSliderHandlers, blockName: display.readPrefAsString(key: .friendlyName) != "" ? display.readPrefAsString(key: .friendlyName) : display.name, monitorSubMenu: monitorSubMenu, numOfDisplays: numOfDisplays, asSubMenu: asSubMenu)
+      self.addDisplayMenuBlock(addedSliderHandlers: addedSliderHandlers, blockName: display.readPrefAsString(key: .friendlyName) != "" ? display.readPrefAsString(key: .friendlyName) : display.name, monitorSubMenu: monitorSubMenu, numOfDisplays: numOfDisplays, asSubMenu: asSubMenu, extraViews: extraViews)
+    } else {
+      for extraView in extraViews {
+        let item = NSMenuItem()
+        item.view = extraView
+        monitorSubMenu.insertItem(item, at: 0)
+      }
     }
     if addedSliderHandlers.count > 0, prefs.integer(forKey: PrefKey.menuIcon.rawValue) == MenuIcon.sliderOnly.rawValue {
       app.updateStatusItemVisibility(true)

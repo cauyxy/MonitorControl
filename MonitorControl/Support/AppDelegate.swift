@@ -45,6 +45,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
       menuslidersPrefsVc!,
       keyboardPrefsVc!,
       displaysPrefsVc!,
+      inputsPrefsVc,
       aboutPrefsVc!,
     ],
     style: self.settingsPaneStyle,
@@ -64,6 +65,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     self.setDefaultPrefs()
     self.setMenu()
     CGDisplayRegisterReconfigurationCallback({ _, _, _ in app.displayReconfigured() }, nil)
+    ArrangementManager.shared.restoreHiddenDisplays()
     self.configure(firstrun: true)
     DisplayManager.shared.createGammaActivityEnforcer()
     self.updaterController.startUpdater()
@@ -107,6 +109,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
   func applicationWillTerminate(_: Notification) {
     os_log("Goodbye!", type: .info)
+    ArrangementManager.shared.restoreHiddenDisplays()
     DisplayManager.shared.resetSwBrightnessForAllDisplays(noPrefSave: true)
     self.updateStatusItemVisibility(true)
   }
@@ -171,6 +174,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
       }
     }
     displaysPrefsVc?.loadDisplayList()
+    inputsPrefsVc.loadDisplayList()
+    ArrangementManager.shared.checkArrangements(onlyNewlyConnected: true)
     self.job(start: true)
   }
 
@@ -189,6 +194,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
   private func subscribeEventListeners() {
     NotificationCenter.default.addObserver(self, selector: #selector(self.audioDeviceChanged), name: Notification.Name.defaultOutputDeviceChanged, object: nil) // subscribe Audio output detector (SimplyCoreAudio)
+    NotificationCenter.default.addObserver(self, selector: #selector(self.hiddenDisplaysChanged), name: .hiddenDisplaysChanged, object: nil)
     DistributedNotificationCenter.default.addObserver(self, selector: #selector(self.displayReconfigured), name: NSNotification.Name(rawValue: kColorSyncDisplayDeviceProfilesNotification.takeRetainedValue() as String), object: nil) // ColorSync change
     NSWorkspace.shared.notificationCenter.addObserver(self, selector: #selector(self.sleepNotification), name: NSWorkspace.screensDidSleepNotification, object: nil) // sleep and wake listeners
     NSWorkspace.shared.notificationCenter.addObserver(self, selector: #selector(self.wakeNotification), name: NSWorkspace.screensDidWakeNotification, object: nil)
@@ -227,6 +233,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         DisplayManager.shared.updateArm64AVServices()
         self.job(start: true)
       }
+      ArrangementManager.shared.checkArrangements(onlyNewlyConnected: false)
       self.startupActionWriteRepeatAfterSober()
       self.updateMediaKeyTap()
     }
@@ -302,6 +309,11 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     self.checkPermissions()
     self.updateMediaKeyTap()
     self.configure(firstrun: true)
+  }
+
+  @objc func hiddenDisplaysChanged() {
+    menu?.updateMenus()
+    inputsPrefsVc.loadDisplayList()
   }
 
   @objc func audioDeviceChanged() {

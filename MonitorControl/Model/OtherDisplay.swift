@@ -9,6 +9,7 @@ class OtherDisplay: Display {
   var arm64ddc: Bool = false
   var arm64avService: IOAVService?
   var isDiscouraged: Bool = false
+  var lastKnownInputSource: UInt16?
   let writeDDCQueue = DispatchQueue(label: "Local write DDC queue")
   var writeDDCNextValue: [Command: UInt16] = [:]
   var writeDDCLastSavedValue: [Command: UInt16] = [:]
@@ -415,6 +416,74 @@ class OtherDisplay: Display {
       } else {
         _ = self.ddc?.write(command: controlCode, value: value, errorRecoveryWaitTime: 2000) ?? false
       }
+    }
+  }
+
+  /// Input this Mac is connected to, the display is removed from the arrangement while it shows another one.
+  var arrangementInputSource: InputSource? {
+    get { InputSource(rawValue: UInt16(self.readPrefAsInt(key: .arrangementInputSource))) }
+    set { self.savePref(Int(newValue?.rawValue ?? 0), key: .arrangementInputSource) }
+  }
+
+  var menuInputSources: [InputSource] {
+    get {
+      guard let values = self.readPrefAsArray(key: .menuInputSources) as? [Int] else {
+        return InputSource.defaultMenuSources
+      }
+      return InputSource.allCases.filter { values.contains(Int($0.rawValue)) }
+    }
+    set { self.savePref(newValue.map { Int($0.rawValue) }, key: .menuInputSources) }
+  }
+
+  // Input switching bypasses writeDDCValues: that path skips a value equal to the last one written (the monitor's OSD may have switched since) and marks the command as touched for startup restore.
+  func writeInputSource(_ value: UInt16, completion: ((Bool) -> Void)? = nil) {
+    DisplayManager.shared.globalDDCQueue.async(flags: .barrier) {
+      var success = false
+      if Arm64DDC.isArm64 {
+        if self.arm64ddc {
+          success = Arm64DDC.write(service: self.arm64avService, command: Command.inputSelect.rawValue, value: value)
+        }
+      } else {
+        success = self.ddc?.write(command: Command.inputSelect.rawValue, value: value, errorRecoveryWaitTime: 2000) ?? false
+      }
+      os_log("Input source write %{public}@ to display %{public}@: %{public}@", type: .info, String(value), String(self.identifier), success ? "ok" : "failed")
+      DispatchQueue.main.async {
+        if success {
+          self.lastKnownInputSource = value
+        }
+        completion?(success)
+      }
+    }
+  }
+
+  func readInputSource(completion: @escaping (UInt16?) -> Void) {
+    let finish = { (value: UInt16?) in
+      DispatchQueue.main.async {
+        if value != nil {
+          self.lastKnownInputSource = value
+        }
+        completion(value)
+      }
+    }
+    guard Arm64DDC.isArm64 else {
+      DispatchQueue.global(qos: .userInitiated).async { // readDDCValues syncs on globalDDCQueue itself
+        finish(self.readDDCValues(for: .inputSelect, tries: 3, minReplyDelay: nil).map { $0.current & 0xFF })
+      }
+      return
+    }
+    DisplayManager.shared.globalDDCQueue.async(flags: .barrier) {
+      // Monitors commonly report vendor bits in the high byte. Hiding a display on a wrong reading is disruptive, so require two matching readings.
+      var previous: UInt16?
+      for _ in 1 ... 4 {
+        let current = self.arm64ddc ? Arm64DDC.readValidated(service: self.arm64avService, command: Command.inputSelect.rawValue).map { $0.current & 0xFF } : nil
+        if current != nil, current == previous {
+          finish(current)
+          return
+        }
+        previous = current
+        usleep(50000)
+      }
+      finish(nil)
     }
   }
 

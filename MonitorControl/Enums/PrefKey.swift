@@ -84,6 +84,9 @@ enum PrefKey: String {
   /// Synchronize brightness from sync source displays among all other displays
   case enableBrightnessSync
 
+  /// IDs of displays currently disabled because they show another input (re-enabled on quit and launch)
+  case hiddenDisplayIDs
+
   /// Sliders for multiple displays
   case multiSliders
 
@@ -124,6 +127,12 @@ enum PrefKey: String {
 
   /// Friendly name
   case friendlyName
+
+  /// Input source this Mac is connected to; while the display shows another input it is removed from the arrangement, 0 = never
+  case arrangementInputSource
+
+  /// Input sources offered in the menu for display (array of VCP 0x60 values)
+  case menuInputSources
 
   /* -- Display+Command specific settings -- */
 

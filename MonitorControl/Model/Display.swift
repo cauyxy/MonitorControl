@@ -55,6 +55,10 @@ class Display: Equatable {
     prefs.bool(forKey: self.getKey(key: key, for: command))
   }
 
+  func readPrefAsArray(key: PrefKey? = nil, for command: Command? = nil) -> [Any]? {
+    prefs.array(forKey: self.getKey(key: key, for: command))
+  }
+
   func readPrefAsString(key: PrefKey? = nil, for command: Command? = nil) -> String {
     prefs.string(forKey: self.getKey(key: key, for: command)) ?? ""
   }

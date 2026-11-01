@@ -6,3 +6,7 @@ Carthage
 
 ### Xcode ###
 xcuserdata/
+# Personal SwiftPM build
+.build/
+PersonalBuild/.work/
+PersonalBuild/out/

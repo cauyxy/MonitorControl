@@ -83,6 +83,25 @@ class Arm64DDC: NSObject {
     return values
   }
 
+  /// Standard DDC/CI VCP read that only accepts a reply for the requested code. `read` leaves the 0x51 source address out of the request checksum,
+  /// which some monitors (AOC AG275UXM over HDMI) answer with garbage, and accepts any reply whose checksum happens to match.
+  static func readValidated(service: IOAVService?, command: UInt8) -> (current: UInt16, max: UInt16)? {
+    guard let service = service else {
+      return nil
+    }
+    var packet: [UInt8] = [0x82, 0x01, command, 0]
+    packet[3] = self.checksum(chk: ARM64_DDC_7BIT_ADDRESS << 1 ^ ARM64_DDC_DATA_ADDRESS, data: &packet, start: 0, end: 2)
+    guard IOAVServiceWriteI2C(service, UInt32(ARM64_DDC_7BIT_ADDRESS), UInt32(ARM64_DDC_DATA_ADDRESS), &packet, UInt32(packet.count)) == 0 else {
+      return nil
+    }
+    usleep(50000)
+    var reply = [UInt8](repeating: 0, count: 11)
+    guard IOAVServiceReadI2C(service, UInt32(ARM64_DDC_7BIT_ADDRESS), 0, &reply, UInt32(reply.count)) == 0, self.checksum(chk: 0x50, data: &reply, start: 0, end: 9) == reply[10], reply[2] == 0x02, reply[3] == 0x00, reply[4] == command else {
+      return nil
+    }
+    return (UInt16(reply[8]) * 256 + UInt16(reply[9]), UInt16(reply[6]) * 256 + UInt16(reply[7]))
+  }
+
   static func write(service: IOAVService?, command: UInt8, value: UInt16, writeSleepTime: UInt32? = nil, numOfWriteCycles: UInt8? = nil, numOfRetryAttemps: UInt8? = nil, retrySleepTime: UInt32? = nil) -> Bool {
     var send: [UInt8] = [command, UInt8(value >> 8), UInt8(value & 255)]
     var reply: [UInt8] = []
